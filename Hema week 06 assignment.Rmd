@@ -1,0 +1,104 @@
+---
+title: "Week 6 Assignment"
+author: "Hemavathi karuppaiah"
+date: "2025-03-03"
+output: html_document
+---
+
+```{r}
+library(data.table)
+library(geosphere)
+library(GA)
+library(purrr)
+library(sf)
+
+## Load the population data
+pop.data <- data.table::fread("Mo_pop_Sim.csv")
+str(pop.data)
+frac <- 0.0001
+small.data <- pop.data[sample(1:nrow(pop.data),
+                               size = round(nrow(pop.data) * frac),
+                               replace = F), ## extract a sample of randomlychosen 1% rows
+                        ]  ## and choose all columns
+
+## Load the FQHC data
+data_path <- 'MO_2018_Federally_Qualified_Health_Center_Locations'
+fqhc.data <- data.table(as.data.frame(st_read(data_path,
+                     'MO_2018_Federally_Qualified_Health_Center_Locations')))
+names(fqhc.data)
+```
+
+```{r}
+fqhc.coords <- fqhc.data[, .(Longitude, Latitude)]
+names(fqhc.coords) <- c("long", "lat")
+
+count_pop_within_radius <- function(fqhc_idx, pop_data, fqhc_coords, radius_miles = 30) {
+  radius_meters <- radius_miles * 1609.34
+  fqhc_loc <- fqhc_coords[fqhc_idx, ]
+  distances <- distGeo(matrix(c(fqhc_loc$long, fqhc_loc$lat), ncol = 2),
+                      matrix(c(pop_data$long, pop_data$lat), ncol = 2))
+  sum(distances <= radius_meters)
+}
+
+pop_counts <- sapply(1:nrow(fqhc.coords), function(i) {
+  count_pop_within_radius(i, small.data, fqhc.coords)
+})
+
+# Create a data frame with FQHC info and population counts
+fqhc_pop_data <- data.table(
+  FQHC_ID = 1:nrow(fqhc.data),
+  Facility = fqhc.data$Facility,
+  City = fqhc.data$City,
+  County = fqhc.data$County,
+  Population_Within_30mi = pop_counts
+)
+
+fqhc_pop_data <- fqhc_pop_data[order(-Population_Within_30mi)]
+top_8_fqhcs <- fqhc_pop_data[1:8]
+
+print(top_8_fqhcs)
+```
+
+```{r}
+fitness_function <- function(solution) {
+  if(sum(solution) != 8) return(0)
+  selected_indices <- which(solution == 1)
+  total_pop_served <- 0
+  total_pop_served <- sum(pop_counts[selected_indices])
+  
+  return(total_pop_served)
+}
+```
+
+```{r}
+ga_result <- ga(type = "binary", 
+                fitness = fitness_function,
+                nBits = nrow(fqhc.coords),
+                popSize = 50,
+                maxiter = 100,
+                run = 50,
+                pmutation = 0.2,
+                monitor = FALSE,
+                seed = 42)
+
+# Get the best solution
+best_solution <- as.logical(ga_result@solution[1, ])
+best_fqhcs <- fqhc.data[best_solution, ]
+
+# Print the GA solution
+print(fqhc.data[best_solution, .(Facility, City, County)])
+```
+
+
+```{r}
+print(top_8_fqhcs$FQHC_ID)
+print(which(best_solution))
+```
+
+The genetic algorithm proves to be my preferred method when choosing FQHCs to provide mental health services. The simple ranking technique discovers areas with maximum individual resident numbers although it ignores service area intersections. The genetic algorithm determines an optimal arrangement of 8 facilities that optimizes the population access while preventing unnecessary duplication between service areas. A real-world objective of system-wide coverage optimization can be better assessed through this method which avoids simplified identification of just populous locations.
+
+The fitness function evaluates which combination of eight FQHCs serves the maximum patient population in this model design. Each solution set comprising eight facilities has a fitness function which determines the total number of individuals who can reach at least one service location within thirty miles from their residence. The tactics enable facility site selection that spreads throughout different geographical areas and encourages services for residents without sufficient healthcare access. Multiple evolutionary generations of the genetic algorithm help discover better facility combinations that optimize this metric.
+
+Several essential assumptions govern this model consisting of three elements: cities act as only geographical entitlement factors for medical use, all demographics have similar mental healthcare requirements yet equal likelihood of use and the 30-mile radius defines suitable travel range, and existing roads are consistently distributed across the territory. Service utilization would demonstrate different patterns because of several real-world factors that impact mental health care utilization including population differences in health needs and transportation convenience and cultural background and present service choices. A complete model should assign different weights to unique populations according to their access to public transportation and use social vulnerability scale measurements.
+
+
